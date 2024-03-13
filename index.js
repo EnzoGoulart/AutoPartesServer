@@ -92,9 +92,7 @@ app.post("/api/verificarLogin", async (req, res) => {
   const select = `SELECT senha FROM users WHERE email = ?`;
   const [pegaSenha] = await conn.execute(select, [email]);
 
-  if (pegaSenha[0]?.senha) {
-    console.log(pegaSenha[0]?.senha)
-    console.log(senha)
+  if (pegaSenha[0]?.senha) { 
     if (pegaSenha[0]?.senha == senha) {
       res.json({ login: true, senha: pegaSenha[0].senha });
     } else {
@@ -137,6 +135,29 @@ app.post("/api/alterarsenha", async (req, res) => {
   } catch (e) { 
     console.log(e);
     res.json({ resposta: -1 }) //Não foi possivel continuar!
+  } 
+});
+
+app.post("/api/retornacategorias", async (req, res) => { 
+  const conn = await createMysqlConn(); 
+  try {   
+    const sqlSel = "SELECT * FROM categorias"
+    const [categorias] = await conn.execute(sqlSel)
+    res.json({ categorias})
+  } catch (e) { 
+    console.log(e);
+    res.json({ categorias: -1 }) //Não foi possivel continuar!
+  } 
+});
+
+app.post("/api/retornaestados", async (req, res) => { 
+  const conn = await createMysqlConn(); 
+  try {   
+    const sqlSel = "SELECT * FROM estados"
+    const [estados] = await conn.execute(sqlSel) 
+    res.json({ estados })
+  } catch (e) {  
+    res.json({ estados: -1 }) //Não foi possivel continuar!
   } 
 });
 
