@@ -133,9 +133,8 @@ app.post("/api/cadastrar", async (req, res) => {
             const createUser = `INSERT INTO autopartes.users (email, nome, senha) VALUES (?, ?, ?)`;
             await conn.execute(createUser, [email, nome, hash]);
 
-            const selLastId = `SELECT last_insert_id() id FROM users `;
-            const id = await conn.execute(selLastId);
-
+            const selLastId = `SELECT last_insert_id() id FROM users LIMIT 1`;
+            const [id] = await conn.execute(selLastId); 
             res.json({
                 created: true,
                 jaExiste: false,
@@ -223,6 +222,21 @@ app.post("/api/retornacategorias", async (req, res) => {
     }
 });
 
+app.post("/api/retornaNome", async (req, res) => { 
+    const conn = await createMysqlConn();
+
+    try {
+        const { id } = req.body
+        const sqlSel = `SELECT nome FROM users WHERE id = ?`;
+        const [nome] = await conn.execute(sqlSel, [id]);
+        res.json(nome);
+    } catch (e) {
+        console.log(e);
+        res.json({ nome: -1 }); //Não foi possivel continuar!
+    } finally {
+        conn.end();
+    }
+});
 app.post("/api/retornaCambios", async (req, res) => {
     console.log("ret");
     const conn = await createMysqlConn();
@@ -473,11 +487,18 @@ app.post("/api/retornafretes", async (req, res) => {
 
 app.post("/api/retornaimagem", async (req, res) => {
     console.log("reima");
-    const { email } = req.body;
+    const { email, id, porId } = req.body;
     const conn = await createMysqlConn();
+     
     try {
+        let emailOfc = email
+        if(porId) {
+            const selEmail = "SELECT email FROM users WHERE id = ?";
+            const [emailSel] = await conn.execute(selEmail, [id]);
+            emailOfc = emailSel[0].email
+        }
         const query = "SELECT imagem FROM imagensperfil WHERE email = ?";
-        const [rows] = await conn.execute(query, [email]);
+        const [rows] = await conn.execute(query, [emailOfc]);
         if (rows.length > 0 && rows[0].imagem) {
             const imagemBase64 = Buffer.from(rows[0].imagem, "binary").toString(
                 "base64"
@@ -914,7 +935,15 @@ app.post("/api/retornaSellerInfos", async (req, res) => {
     const conn = await createMysqlConn();
     try {
         const { id } = req.body;
-        const query = `SELECT email, nome, vendas, avaliacao, TIMESTAMPDIFF(SECOND, users.dataCriacao, NOW()) dataCriacao FROM users WHERE id = ? LIMIT 1`;
+        const query = `SELECT id, 
+                                email, 
+                                nome, 
+                                vendas, 
+                                avaliacao, 
+                                TIMESTAMPDIFF(SECOND, users.dataCriacao, NOW()) dataCriacao 
+                                FROM users 
+                                WHERE id = ? 
+                                LIMIT 1`;
         const [rows] = await conn.execute(query, [id]);
         if (rows.length > 0) {
             res.json(rows[0]);
@@ -1037,7 +1066,7 @@ app.post("/api/criaRelacionamentoCarrinho", async (req, res) => {
             res.json({ created: false });
         }
     } catch (error) {
-        console.error("Erro ao criar algoritmo:", error);
+        console.error("Erro ao criar carrinho:", error);
         res.status(500).json({ error: "Erro interno do servidor" });
     } finally {
         conn.end();
@@ -1215,12 +1244,49 @@ app.post("/api/returnSearchList", async (req, res) => {
                         dataCriacao DESC
                   LIMIT 80;`;
             arr = [search];
+        }  else if(tipo.split("-")[0] == '2') {
+            sel = `SELECT posts.id, 
+                            CONCAT(
+                            LEFT(posts.titulo, IF(CHAR_LENGTH(posts.titulo) > 50, 47, CHAR_LENGTH(posts.titulo))),
+                    IF(CHAR_LENGTH(posts.titulo) > 50, '...', '')
+                            ) AS titulo, 
+                                posts.descri, 
+                                posts.preco, 
+                                posts.cor, 
+                                posts.sku, 
+                                posts.avaliacao, 
+                                posts.vendas, 
+                                posts.custoFrete, 
+                                posts.dataCriacao, 
+                                posts.frete, 
+                                categorias.descri categoria, 
+                                estados.descri estado,  
+                                users.id sellerId,                             
+                                users.email,
+                                users.nome sellerUsername, 
+                                users.vendas sellerVendas, 
+                                users.avaliacao sellerAvaliacao,  
+                                fretes.descriResumida,
+        TIMESTAMPDIFF(SECOND, users.dataCriacao, NOW()) AS sellerDataCriacao, 
+                        MATCH (titulo) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevancia
+                        FROM posts
+                    INNER JOIN categorias ON categorias.id = posts.categoria 
+                    INNER JOIN estados ON estados.id = posts.estado  
+                    INNER JOIN users ON users.email = posts.email
+                    INNER JOIN fretes ON fretes.id = posts.frete
+                WHERE MATCH (titulo) AGAINST (? IN NATURAL LANGUAGE MODE)
+                                AND users.id = ?
+                    ORDER BY relevancia DESC, 
+                                datacriacao DESC
+                        LIMIT 80; `;
+ 
+            arr = [search, search, tipo.split("-")[1]];
         }
 
         const [rows] = await conn.execute(sel, arr);
-        res.json(rows);
+        res.json(rows || []);
     } catch (error) {
-        console.error("Erro ao retornar carrinho:", error);
+        console.error("Erro ao retornar search list:", error);
         res.status(500).json({ error: "Erro interno do servidor" });
     } finally {
         conn.end();
@@ -1232,7 +1298,7 @@ app.post("/api/returnChats", async (req, res) => {
     const conn = await createMysqlConn();
     try {
         const { id } = req.body;
-
+ 
         const query = `SELECT 
                             chat.idEnv, 
                             chat.idRec, 
@@ -1246,26 +1312,32 @@ app.post("/api/returnChats", async (req, res) => {
                         FROM chat 
                         INNER JOIN users idenv ON idenv.id = chat.idEnv
                         INNER JOIN users idrec ON idrec.id = chat.idRec
-                        WHERE idRec IN (
-                            SELECT idRec
-                            FROM chat
-                            WHERE idEnv = ?
-                            GROUP BY idRec
-                        )
-                        AND chat.dataCriacao = (
+                        WHERE chat.dataCriacao = (
                             SELECT MAX(dataCriacao)
                             FROM chat c
                             WHERE c.idRec = chat.idRec
                             AND c.idEnv = chat.idEnv
                         ) 
+                        AND (idEnv = ? OR idRec = ?)
                         ORDER BY chat.dataCriacao DESC;
                         `;
-        const [rows] = await conn.execute(query, [id]);
-
+        let [rows] = await conn.execute(query, [id, id]);
+ 
+        let array = []
         for (let i = 0; i < rows.length; i++) {
+            let num = rows[i].idEnv == id ? rows[i].idRec : rows[i].idEnv
+            
+            if(array.includes(num)) {
+                rows.splice(i, 1)
+                i --
+                continue
+            } 
+    
+            array.push(num)
+            
             let msgDec = jab.decrypt(rows[i].msg);
-            if (msgDec.length > 30) {
-                msgDec = msgDec.slice(0, 27) + "...";
+            if (msgDec.length > 22) {
+                msgDec = msgDec.slice(0, 19) + "...";
             }
             rows[i].msg = msgDec;
         }
@@ -1284,10 +1356,10 @@ app.post("/api/returnChat", async (req, res) => {
     const conn = await createMysqlConn();
     try {
         const { idUser, idParam } = req.body;
-
+ 
         const update = `UPDATE chat SET visualizado = ? WHERE idEnv = ? AND idRec = ? AND visualizado != ?`;
         await conn.execute(update, [1, idParam, idUser, 1]);
-
+ 
         const query = `SELECT DISTINCT chat.idEnv, 
                                         chat.idRec, 
                                         chat.msg, 
@@ -1311,14 +1383,10 @@ app.post("/api/returnChat", async (req, res) => {
             idParam,
         ]);
 
-        for (let i = 0; i < rows.length; i++) {
-            let msgDec = jab.decrypt(rows[i].msg);
-            if (msgDec.length > 30) {
-                msgDec = msgDec.slice(0, 27) + "...";
-            }
-            rows[i].msg = msgDec;
+        for (let i = 0; i < rows.length; i++) { 
+            rows[i].msg = jab.decrypt(rows[i].msg); 
         }
-
+ 
         res.json(rows);
     } catch (error) {
         console.error("Erro ao buscar chat:", error);
