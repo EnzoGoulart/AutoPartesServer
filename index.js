@@ -1427,7 +1427,7 @@ app.post("/api/enviaMensagemChat", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-    res.send();
+    res.send("Server on");
 });
 
 app.listen(port, () => {
